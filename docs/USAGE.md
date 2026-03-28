@@ -154,3 +154,45 @@ OAuth is an open standard for delegation of access...
 - **Total de Q&A:** 1
 - **Encerrada em:** 2026-03-28 14:30:55
 ```
+
+---
+
+## ♾️ Infinite-loop detection (v2.0)
+
+When the native Copilot CLI enters a continuous-scroll loop the wrapper
+detects it automatically, stops collecting output, and saves only the valid
+response to the log.
+
+### What you see on screen
+
+```
+> How do I fix this error?
+
+[Wrapper streaming CLI output…]
+
+Starting analysis...
+Checking dependencies...
+Compiling code...
+
+⚠️  Loop detectado após 1 ciclo(s) (confiança: 95%).
+✅ Resposta válida capturada e salva no log.
+⌨️  Pressione Ctrl+C para interromper o CLI se necessário.
+
+>
+```
+
+### What gets saved to the log
+
+Only the content captured **before** the loop begins is written to the log
+file.  The repeating scroll output is discarded entirely.
+
+### Detection strategies
+
+| Strategy | Triggers when |
+|----------|---------------|
+| Exact match | The same sequence of lines restarts (confidence 95 %) |
+| Pattern match | Structurally identical lines with varying numbers / e-mails / timestamps / paths (confidence 80 %) |
+| High output rate | More than 50 lines/second for more than 50 lines (confidence 70 %) |
+
+See [LOOP_DETECTION.md](LOOP_DETECTION.md) for full technical details.
+

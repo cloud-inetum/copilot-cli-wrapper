@@ -6,10 +6,13 @@ namespace CopilotCliWrapper;
 /// <summary>
 /// Locates and executes the native GitHub Copilot CLI, streaming its
 /// stdout/stderr back to the caller while capturing the combined output.
+/// Integrates <see cref="SmartLoopDetector"/> to stop capturing when an
+/// infinite-output loop is detected and to preserve only the valid response.
 /// </summary>
 public class CliExecutor
 {
     private readonly string _cliPath;
+    private SmartLoopDetector _loopDetector = new();
 
     public CliExecutor(string? cliPath = null)
     {
@@ -23,20 +26,42 @@ public class CliExecutor
     /// <summary>
     /// Executes the Copilot CLI with <paramref name="arguments"/>, streaming
     /// output to the console and returning the captured combined output.
+    /// When an infinite loop is detected the method stops collecting output,
+    /// returns only the valid portion of the response, and prints a warning.
     /// </summary>
     public async Task<string> RunAsync(string arguments, CancellationToken cancellationToken = default)
     {
         ValidateCli();
+
+        _loopDetector = new SmartLoopDetector();
 
         var psi = BuildProcessStartInfo(arguments);
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
 
         var outputBuilder = new System.Text.StringBuilder();
         var tcs = new TaskCompletionSource<int>();
+        var loopCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        string? validResponseOnLoop = null;
 
         process.OutputDataReceived += (_, e) =>
         {
             if (e.Data is null) return;
+            if (loopCts.IsCancellationRequested) return;
+
+            var result = _loopDetector.DetectLoop(e.Data);
+
+            if (result.IsLooping)
+            {
+                validResponseOnLoop = result.ValidResponse;
+                Console.WriteLine();
+                Console.WriteLine($"⚠️  Loop detectado após {result.CycleCount} ciclo(s) " +
+                                  $"(confiança: {result.Confidence:P0}).");
+                Console.WriteLine("✅ Resposta válida capturada e salva no log.");
+                Console.WriteLine("⌨️  Pressione Ctrl+C para interromper o CLI se necessário.");
+                loopCts.Cancel();
+                return;
+            }
+
             Console.WriteLine(e.Data);
             outputBuilder.AppendLine(e.Data);
         };
@@ -44,6 +69,7 @@ public class CliExecutor
         process.ErrorDataReceived += (_, e) =>
         {
             if (e.Data is null) return;
+            if (loopCts.IsCancellationRequested) return;
             Console.Error.WriteLine(e.Data);
             outputBuilder.AppendLine(e.Data);
         };
@@ -60,6 +86,10 @@ public class CliExecutor
         });
 
         await tcs.Task;
+
+        // If a loop was detected, return only the valid portion of the output.
+        if (validResponseOnLoop is not null)
+            return validResponseOnLoop;
 
         return outputBuilder.ToString();
     }
