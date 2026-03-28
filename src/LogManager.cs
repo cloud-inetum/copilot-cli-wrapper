@@ -50,9 +50,11 @@ public class LogManager
     }
 
     /// <summary>
-    /// Appends a Q&amp;A entry to the log file.
+    /// Appends a Q&amp;A entry to the log file.  When <paramref name="loopDetectedAt"/>
+    /// is provided the entry is marked with a loop-detection notice and the
+    /// timestamp of detection.
     /// </summary>
-    public void WriteEntry(ConversationEntry entry)
+    public void WriteEntry(ConversationEntry entry, DateTime? loopDetectedAt = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("### ❓ Pergunta");
@@ -62,6 +64,13 @@ public class LogManager
         sb.AppendLine(entry.Answer.TrimEnd());
         sb.AppendLine();
         sb.AppendLine($"**🕐 {entry.Timestamp:HH:mm:ss}** | **Model:** {entry.Model}");
+
+        if (loopDetectedAt.HasValue)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"> ⚠️ **loop_detected: true** | Detected at: {loopDetectedAt.Value:HH:mm:ss.fff}");
+        }
+
         sb.AppendLine();
         sb.AppendLine("---");
         sb.AppendLine();

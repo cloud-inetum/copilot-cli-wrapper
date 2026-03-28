@@ -117,11 +117,11 @@ public class CopilotCliWrapper
     private async Task ExecuteAndLogAsync(string prompt, CancellationToken cancellationToken)
     {
         var args = BuildCliArguments(prompt);
-        string output;
+        CliExecutionResult result;
 
         try
         {
-            output = await _executor.RunAsync(args, cancellationToken);
+            result = await _executor.RunAsync(args, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -133,12 +133,14 @@ public class CopilotCliWrapper
         {
             Id = ++_entryCounter,
             Question = prompt,
-            Answer = output,
+            Answer = result.Output,
             Model = _session.Model
         };
 
         _history.Add(entry);
-        _logManager.WriteEntry(entry);
+
+        DateTime? loopDetectedAt = result.LoopDetected ? DateTime.UtcNow : null;
+        _logManager.WriteEntry(entry, loopDetectedAt);
     }
 
     private string BuildCliArguments(string prompt)

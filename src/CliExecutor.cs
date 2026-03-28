@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using CopilotCliWrapper.Models;
 
 namespace CopilotCliWrapper;
 
@@ -23,20 +24,40 @@ public class CliExecutor
     /// <summary>
     /// Executes the Copilot CLI with <paramref name="arguments"/>, streaming
     /// output to the console and returning the captured combined output.
+    /// When an infinite loop is detected the process is stopped early and
+    /// only the valid (pre-loop) portion of the output is returned.
     /// </summary>
-    public async Task<string> RunAsync(string arguments, CancellationToken cancellationToken = default)
+    public async Task<CliExecutionResult> RunAsync(string arguments, CancellationToken cancellationToken = default)
     {
         ValidateCli();
 
+        var detector = new SmartLoopDetector();
         var psi = BuildProcessStartInfo(arguments);
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
 
         var outputBuilder = new System.Text.StringBuilder();
         var tcs = new TaskCompletionSource<int>();
+        LoopDetectionResult? loopResult = null;
+        var loopDetected = false;
 
         process.OutputDataReceived += (_, e) =>
         {
             if (e.Data is null) return;
+            if (loopDetected) return;
+
+            var detection = detector.Analyse(e.Data);
+
+            if (detection.IsLooping)
+            {
+                loopDetected = true;
+                loopResult = detection;
+
+                PrintLoopWarning(detection);
+
+                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                return;
+            }
+
             Console.WriteLine(e.Data);
             outputBuilder.AppendLine(e.Data);
         };
@@ -44,6 +65,7 @@ public class CliExecutor
         process.ErrorDataReceived += (_, e) =>
         {
             if (e.Data is null) return;
+            if (loopDetected) return;
             Console.Error.WriteLine(e.Data);
             outputBuilder.AppendLine(e.Data);
         };
@@ -61,7 +83,17 @@ public class CliExecutor
 
         await tcs.Task;
 
-        return outputBuilder.ToString();
+        if (loopDetected && loopResult is not null)
+        {
+            // Return only the valid (pre-loop) response.
+            var validOutput = string.IsNullOrEmpty(loopResult.ValidResponse)
+                ? outputBuilder.ToString()
+                : loopResult.ValidResponse;
+
+            return new CliExecutionResult(validOutput, loopResult);
+        }
+
+        return new CliExecutionResult(outputBuilder.ToString(), null);
     }
 
     /// <summary>
@@ -170,5 +202,42 @@ public class CliExecutor
 
         return paths.Any(dir =>
             extensions.Any(ext => File.Exists(Path.Combine(dir, executable + ext))));
+    }
+
+    private static void PrintLoopWarning(LoopDetectionResult result)
+    {
+        Console.WriteLine();
+        Console.WriteLine("[⚠️  Loop infinito detectado!]");
+        Console.WriteLine($"[✅ Ciclos detectados: {result.CycleCount}]");
+        Console.WriteLine($"[✅ Tamanho do ciclo: {result.CycleLength} linhas]");
+        Console.WriteLine($"[✅ Confiança: {result.Confidence * 100:F0}%]");
+        Console.WriteLine("[✅ Resposta válida salva no log]");
+        Console.WriteLine("[⌨️  Pressione Ctrl+C para parar o CLI]");
+    }
+}
+
+/// <summary>
+/// Encapsulates the result of a CLI execution, including any loop-detection
+/// metadata.
+/// </summary>
+public sealed class CliExecutionResult
+{
+    /// <summary>
+    /// The captured (valid, pre-loop) output from the CLI process.
+    /// </summary>
+    public string Output { get; }
+
+    /// <summary>
+    /// Loop-detection metadata when a loop was detected; <c>null</c> otherwise.
+    /// </summary>
+    public LoopDetectionResult? LoopDetection { get; }
+
+    /// <summary>Whether a loop was detected during this execution.</summary>
+    public bool LoopDetected => LoopDetection?.IsLooping == true;
+
+    public CliExecutionResult(string output, LoopDetectionResult? loopDetection)
+    {
+        Output = output;
+        LoopDetection = loopDetection;
     }
 }
